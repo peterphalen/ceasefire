@@ -52,6 +52,7 @@ ggplot(daily) +
   geom_point(alpha=.2) + 
   xlab("date") +
   ylab("shootings") +
+  scale_y_continuous(breaks=c(0,2,4,6,8,10,12)) +
   scale_x_date(labels = date_format("%b %Y")) +
   ggtitle(" ", 
           subtitle="Baltimore (2012-present)")
@@ -86,6 +87,7 @@ ggplot(daily) +
   geom_point(alpha=.2) + 
   xlab("date") +
   ylab("shootings") +
+  scale_y_continuous(breaks=c(0,2,4,6,8,10,12)) +
   scale_x_date(labels = date_format("%b %Y")) +
   ggtitle(" ", 
           subtitle="Baltimore (2012-present)")
@@ -124,7 +126,7 @@ nbds$count <- sapply(nbds$Name, getshootingcount)
 
 # draw legend
 range.count <- range(nbds$count,na.rm=T)
-labs <- c(0,50,100,150)
+labs <- c(0,50,100,150,200)
 pal.crime <- colorNumeric(colorRamp(c('#ccccff', 'red')), labs)
 
 leaflet(nbds) %>% 
@@ -167,7 +169,7 @@ getcount <- function(neighborhood){
 
 nbds$count <- sapply(nbds$Name, getcount)
 
-labs <- c(0,50,100,150)
+labs <- c(0,50,100,150,200)
 pal.crime <- colorNumeric(colorRamp(c('#ccccff', 'red')), labs)
 
 leaflet(nbds) %>% 
@@ -183,7 +185,7 @@ leaflet(nbds) %>%
 nbds$per1k <- nbds$count / nbds$Population * 1000
 nbds$per1k <- round(nbds$per1k)
 nbds$per1k <- ifelse(nbds$Population == 0, NA, nbds$per1k)
-labs <- c(0,10,20,30,40)
+labs <- c(0,20,40,60)
 pal.crime <- colorNumeric(colorRamp(c('#ccccff', 'red')), 
                           labs,
                           na.color = "#b2b2b2")
@@ -268,7 +270,7 @@ m1 <- prophet(ts,
 We plot the model against the data. We can see that there are more shootings in recent years, but there is clear seasonality, and check out the multiple downward blue spikes in the bottom-right...
 
 ```{r, echo=FALSE}
-future <- make_future_dataframe(m1, periods = 90)
+future <- make_future_dataframe(m1, periods = 30)
 forecast <- predict(m1, future)
 plot(m1, forecast)
 ```
@@ -276,7 +278,7 @@ plot(m1, forecast)
 The ```prophet``` code is really simple, which is nice. Here's how we made the above plot:
 
 ```{r, eval=FALSE}
-future <- make_future_dataframe(m1, periods = 90)
+future <- make_future_dataframe(m1, periods = 30)
 forecast <- predict(m1, future)
 plot(m1, forecast)
 ```
@@ -388,10 +390,13 @@ This custom model specification has slower moving seasonal trends. Summers still
 Finally, we can use this model to plot the effect of Ceasefires on shootings per day, after accounting for all these trends and seasonal effects:
 
 ```{r, echo=FALSE, message=FALSE, warning=FALSE}
-p[[4]] + xlab("")
+p[[4]] +  # ceasefires
+  xlab("") + 
+  ggtitle("Predicted counts of shootings",
+          subtitle="with 95% credible intervals")
 ```
 
-On an average day in Baltimore, at least two people get shot. But Ceasefire weekends are different. After accounting for time trends and seasonal effects, Ceasefires appear to prevent more than one shooting every day.
+On an average day in Baltimore, at least three people get shot. But Ceasefire weekends are different. After accounting for time trends and seasonal effects, Ceasefires appear to prevent about two shootings every day.
 
 ```{r, eval=FALSE}
 #----- code to produce final decomposition figures ------
