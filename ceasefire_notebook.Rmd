@@ -52,7 +52,7 @@ ggplot(daily) +
   geom_point(alpha=.2) + 
   xlab("date") +
   ylab("shootings") +
-  scale_y_continuous(breaks=c(0,2,4,6,8,10,12)) +
+  scale_y_continuous(breaks=c(0,4,8,12)) +
   scale_x_date(labels = date_format("%b %Y")) +
   ggtitle(" ", 
           subtitle="Baltimore (2012-present)")
@@ -64,7 +64,8 @@ Shootings per day seem to have increased over time, but the time series is compl
 library(tidyverse)
 library(scales)
 
-# data backed up on github
+# data came from here: https://data.baltimorecity.gov/Public-Safety/BPD-Part-1-Victim-Based-Crime-Data/wsfq-mvij/data
+# but I'm loading a copy that I backed up on github
 bpd <- read_csv("https://raw.githubusercontent.com/peterphalen/ceasefire/master/BPD_Part_1_Victim_Based_Crime_Data.csv")
 
 # subset to shootings or homicides with a firearm
@@ -87,7 +88,7 @@ ggplot(daily) +
   geom_point(alpha=.2) + 
   xlab("date") +
   ylab("shootings") +
-  scale_y_continuous(breaks=c(0,2,4,6,8,10,12)) +
+  scale_y_continuous(breaks=c(0,4,8,12)) +
   scale_x_date(labels = date_format("%b %Y")) +
   ggtitle(" ", 
           subtitle="Baltimore (2012-present)")
@@ -153,6 +154,9 @@ count <- bpd %>%
   group_by(Neighborhood) %>%
   summarise(total.count=n()) 
 
+# get polygon data to draw neighborhoods.
+# these shapes downloaded from Baltimore Open Data at https://gis-baltimore.opendata.arcgis.com/datasets/1ca93e68f11541d4b59a63243725c4b7_0.geojson
+# but I'm pulling from a github backup for stability
 nbds <- geojsonio::geojson_read("https://raw.githubusercontent.com/peterphalen/ceasefire/master/Neighborhoods.geojson", what = "sp")
 
 getcount <- function(neighborhood){
@@ -194,8 +198,8 @@ countlabel <- paste0(nbds$Name,"<br/>",nbds$count," shootings among ",nbds$Popul
 nbds$countlabel <- ifelse(nbds$Population == 0, paste0(nbds$Name,":<br/>","No residents"), countlabel)
 
 leaflet(nbds) %>% #draw population-adjusted map,
-                  #areas with 0 residents show as 
-                  #but can still be clicked
+                  #areas with 0 residents are greyed 
+                  #out but can still be clicked
   addProviderTiles(providers$CartoDB.PositronNoLabels) %>%
   addPolygons(stroke=T,
               weight=1,
@@ -267,7 +271,7 @@ m1 <- prophet(ts,
 
 ```
 
-We plot the model against the data. We can see that there are more shootings in recent years, but there is clear seasonality, and check out the multiple downward blue spikes in the bottom-right...
+We plot the model against the data. We can see that there are more shootings in recent years, but there is clear seasonality. And check out the multiple downward blue spikes in the bottom-right...
 
 ```{r, echo=FALSE}
 future <- make_future_dataframe(m1, periods = 30)
@@ -298,7 +302,7 @@ prophet_plot_components(m1, forecast)
 
 ## Customized model
 
-The ```prophet``` package doesn't let us fit poisson likelihoods and doesn't let us drill down and check the various effects for stuff like statistical significance, so we're going to fit our own Bayesian model using Stan via the ```brms``` package.
+The ```prophet``` package is user-friendly but it doesn't let us drill down and check the various effects for stuff like statistical significance. It also doesn't allow us to use a poisson link function, which we want because the outcome is a count and has almost identical mean and standard deviation. So we're going to fit our own Bayesian model in Stan using the more flexible ```brms``` package.
 
 We want to include information about the day of the week (Mon-Sun), the day of the year (0-364), and the date (julian), as well as a binary variable indicating whether a date occurs during ceasefire. 
 
@@ -330,7 +334,7 @@ m2 <- brm(shootings ~ s(julz) +
            family=poisson)
 ```
 
-Let's look at the predictions from the model that we just fit. Ceasefires are visible as six dramatic downward red spikes in 2017-2018.
+Let's plot the model against the observations. Ceasefires are visible as six dramatic downward red spikes in 2017-2018.
 
 ```{r, echo=FALSE, message=FALSE, warning=FALSE}
 daily$Estimate <- fitted(m2, scale="response")[,1]
@@ -344,11 +348,12 @@ daily %>%
   geom_point(alpha=.2) +
   geom_line(aes(y = Estimate), alpha=.5, color="red") +
   geom_ribbon(aes(ymin=low, ymax=high), alpha=.2) +
+  scale_y_continuous(breaks=c(0,4,8,12)) +
   xlab("date") +
   theme_bw()
 ```
 
-The results cohere well with ```prophet```, but this model fits the data better in many ways (e.g., we no longer see impossible predictions of less than zero shootings). Also, doing things with ```brms``` will allow us to analyze the model more carefully. Here's how we created the above plot:
+The results cohere well with ```prophet```, but this model fits the data better in many ways. For example, we no longer see impossible predictions of less than zero shootings. Also, doing things with ```brms``` will allow us to analyze the model more carefully. Here's how we created the above plot:
 
 ```{r, eval=FALSE}
 daily$Estimate <- fitted(m2, scale="response")[,1]
@@ -362,13 +367,14 @@ daily %>%
   geom_point(alpha=.2) +
   geom_line(aes(y = Estimate), alpha=.5, color="red") +
   geom_ribbon(aes(ymin=low, ymax=high), alpha=.2) +
+  scale_y_continuous(breaks=c(0,4,8,12)) +
   xlab("date") +
   theme_bw()
 ```
 
 #### Plot model components
 
-Here are the decomposed seasonal and time trend effects:
+Here are the marginal seasonal and time trend effects, showing the components that make up the above time series:
 
 ```{r, echo=FALSE, message=FALSE, warning=FALSE}
 p <- purrr::map(
@@ -383,7 +389,7 @@ library(gridExtra)
 grid.arrange(p[[3]], p[[2]],p[[1]])
 ```
 
-This custom model specification has slower moving seasonal trends. Summers still show up as particularly bad. 
+Our model specification has slower-moving seasonal trends. Summers still show up as particularly bad. 
 
 ## Effect of Ceasefire
 
