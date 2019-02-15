@@ -1,0 +1,386 @@
+---
+title: "Modeling the Effect of Baltimore Ceasefire"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r, include = FALSE}
+#download needed packages you don't have 
+wants <- c("tidyverse",
+           "prophet", 
+           "leaflet", 
+           "lubridate",
+           "geojsonio", 
+           "scales",
+           "brms")
+has   <- wants %in% rownames(installed.packages())
+if(any(!has)) install.packages(wants[!has])
+#load needed packages
+sapply(wants, require, character.only = TRUE)
+```
+
+[Baltimore Ceasefire 365](https://baltimoreceasefire.com/) is a city-wide call asking Baltimore residents to avoid having any murders through quarterly Ceasefires and Peace Challenges (Feb, May, August, and Nov). Here we model the impact of the ceasefire on shootings.
+
+## Shootings in Baltimore
+
+Baltimore releases [detailed data](https://data.baltimorecity.gov) on issues relevant to the city, including crime. This allows us to get a pretty precise idea of the distribution of shootings in Baltimore.
+
+```{r, message=FALSE, include=FALSE}
+bpd <- read_csv("https://raw.githubusercontent.com/peterphalen/ceasfire/master/BPD_Part_1_Victim_Based_Crime_Data.csv")
+
+bpd <- subset(bpd, Description == "SHOOTING")
+
+bpd$CrimeDate <- as.Date(bpd$CrimeDate, format = "%m/%d/%Y")
+
+# there are many crimes per day. collapse to daily counts
+daily <- bpd %>% group_by(CrimeDate) %>% summarise(shootings = n())
+
+# fill missing dates, because some had no shotings
+full.ts <- data.frame(CrimeDate = seq(daily$CrimeDate[1], 
+                                      daily$CrimeDate[nrow(daily)], by="day"))
+daily <- full_join(full.ts,daily)
+daily <- daily %>% group_by(CrimeDate) %>% mutate_all(funs(ifelse(is.na(.),0,.)))
+
+```
+
+Shootings per day seem to have increased somewhat over time, but the time series is complicated.
+```{r, echo=FALSE}
+ggplot(daily) +
+  aes(x=CrimeDate, y=shootings) +
+  geom_point(alpha=.2) + 
+  xlab("date") +
+  ylab("shootings") +
+  scale_x_date(labels = date_format("%b %Y")) +
+  ggtitle(" ", 
+          subtitle="Baltimore (2012-present)")
+```
+
+```{r, eval=FALSE}
+library(tidyverse)
+library(scales)
+
+# data backed up on github
+bpd <- read_csv("https://raw.githubusercontent.com/peterphalen/ceasfire/master/BPD_Part_1_Victim_Based_Crime_Data.csv")
+
+bpd <- subset(bpd, Description == "SHOOTING")
+
+bpd$CrimeDate <- as.Date(bpd$CrimeDate, format = "%m/%d/%Y")
+
+# there are many crimes per day. collapse to daily counts
+daily <- bpd %>% group_by(CrimeDate) %>% summarise(shootings = n())
+
+# fill missing dates, because some had no shotings
+full.ts <- data.frame(CrimeDate = seq(daily$CrimeDate[1], 
+                                      daily$CrimeDate[nrow(daily)], by="day"))
+daily <- full_join(full.ts,daily)
+daily <- daily %>% group_by(CrimeDate) %>% mutate_all(funs(ifelse(is.na(.),0,.)))
+
+ggplot(daily) +
+  aes(x=CrimeDate, y=shootings) +
+  geom_point(alpha=.2) + 
+  xlab("date") +
+  ylab("shootings") +
+  scale_x_date(labels = date_format("%b %Y")) +
+  ggtitle(" ", 
+          subtitle="Baltimore (2012-present)")
+```
+
+These shootings disproportionately affect black communities. 
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(geojsonio)
+library(leaflet)
+
+bpd$Neighborhood <- factor(bpd$Neighborhood)
+bpd <- subset(bpd, !is.na(Neighborhood))
+
+# count by neighobrhood
+count <- bpd %>%
+  group_by(Neighborhood) %>%
+  summarise(total.count=n()) 
+
+# get polygons to draw neighborhood maps
+nbds <- geojsonio::geojson_read("https://gis-baltimore.opendata.arcgis.com/datasets/1ca93e68f11541d4b59a63243725c4b7_0.geojson", what = "sp")
+
+getshootingcount <- function(neighborhood){
+  nbd <- as.character(neighborhood)
+  nbds <- as.character(count$Neighborhood)
+  if(nbd %in% nbds){
+    count <- count[count$Neighborhood == nbd,]$total.count
+    return(count)
+  }
+  if(!(nbd %in% nbds)){
+    return(0)
+  }
+}
+
+nbds$count <- sapply(nbds$Name, getshootingcount)
+
+# draw legend
+range.count <- range(nbds$count,na.rm=T)
+labs <- c(0,50,100,150)
+pal.crime <- colorNumeric(colorRamp(c('#ccccff', 'red')), labs)
+
+leaflet(nbds) %>% 
+  addProviderTiles(providers$CartoDB.PositronNoLabels) %>%
+  addPolygons(stroke=T,
+              weight=1,
+              popup=paste0(nbds$Name,"<br/>Shootings: ",nbds$count),
+              color=~pal.crime(count),
+              fillOpacity=.5) %>%
+  addLegend("bottomright",title="# of Shootings (2012-present)",colors=~pal.crime(labs),labels=~labs)
+
+```
+
+```{r, include=FALSE}
+nbds$per1k <- nbds$count / nbds$Population * 1000
+nbds$per1k <- round(nbds$per1k)
+nbds$per1k <- ifelse(nbds$Population == 0, NA, nbds$per1k)
+range.count <- range(nbds$per1k,na.rm=T)
+labs <- c(0,10,20,30, 40)
+pal.crime <- colorNumeric(colorRamp(c('#ccccff', 'red')), 
+                          labs,
+                          na.color = "#b2b2b2")
+
+countlabel <- paste0(nbds$Name,"<br/>",nbds$count," shootings among ",nbds$Population," residents")
+nbds$countlabel <- ifelse(nbds$Population == 0, paste0(nbds$Name,":<br/>","No residents"), countlabel)
+
+leaflet(nbds) %>% 
+  addProviderTiles(providers$CartoDB.PositronNoLabels) %>%
+  addPolygons(stroke=T,
+              weight=1,
+              popup=nbds$countlabel,
+              color=~pal.crime(per1k),
+              fillOpacity=.6) %>%
+  addLegend("bottomright",title="Shootings per one</br>thousand residents</br>(2012-present)",colors=~pal.crime(labs),labels=~labs)
+
+```
+
+```{r, eval=FALSE}
+library(geojsonio)
+library(leaflet)
+
+bpd$Neighborhood <- factor(bpd$Neighborhood)
+bpd <- subset(bpd, !is.na(Neighborhood))
+
+count <- bpd %>%
+  group_by(Neighborhood) %>%
+  summarise(total.count=n()) 
+
+nbds <- geojsonio::geojson_read("https://gis-baltimore.opendata.arcgis.com/datasets/1ca93e68f11541d4b59a63243725c4b7_0.geojson", what = "sp")
+
+getcount <- function(neighborhood){
+  nbd <- as.character(neighborhood)
+  nbds <- as.character(count$Neighborhood)
+  if(nbd %in% nbds){
+    count <- count[count$Neighborhood == nbd,]$total.count
+    return(count)
+  }
+  if(!(nbd %in% nbds)){
+    return(0)
+  }
+}
+
+nbds$count <- sapply(nbds$Name, getcount)
+
+labs <- c(0,50,100,150)
+pal.crime <- colorNumeric(colorRamp(c('#ccccff', 'red')), labs)
+
+leaflet(nbds) %>% 
+  addProviderTiles(providers$CartoDB.PositronNoLabels) %>%
+  addPolygons(stroke=T,
+              weight=1,
+              popup=paste0(nbds$Name,"<br/>Shootings: ",nbds$count),
+              color=~pal.crime(count),
+              fillOpacity=.5) %>%
+  addLegend("bottomright",title="# of Shootings (2012-present)",colors=~pal.crime(labs),labels=~labs)
+```
+
+
+## Ceasefire weekends
+
+Ceasefires have been called four times per year since August 2017. These are "ceasefire weekends" but their impact often extends well beyond a few days ([one lasted twelve](https://www.baltimoresun.com/news/maryland/crime/bs-md-ci-ceasefire-anniversary-20180731-story.html)). Check out [their website](https://baltimoreceasefire.com).
+
+Here are the first days of each ceasefire (all Fridays).
+```{r, message=FALSE}
+# first day (Friday) of ceasefire weekends
+ceasefire.initial <- as.Date(c("08/04/2017",
+                               "11/03/2017",
+                               "02/02/2018",
+                               "05/11/2018",
+                               "08/03/2018",
+                               "11/02/2018",
+                               "02/01/2019",
+                               "05/10/2019",
+                               "08/02/2019"),
+                             format="%m/%d/%Y")
+```
+
+We determine the weekends of each ceasefire so we can see whether these weekends had fewer shootings, after accounting for other trends and seasonal effects.
+```{r}
+ceasefire.weekends <- ceasefire.initial[1]
+for (i in 2:length(ceasefire.initial)){
+  ceasefire.weekends <- c(ceasefire.weekends,
+                          seq(from=ceasefire.initial[i], 
+                              by="day", 
+                              length.out=3))
+}
+```
+
+## Initial model
+
+First we're going to use Facebook's ```prophet``` package to check the rough effect of the ceasefire (coded as a "holiday") while accounting for time trends and yearly and weekly seasonality. The ```prophet``` package was designed to be a good first pass: it gives you decent forecasts without a lot of manual effort.
+
+We feed the ceasefire weekend dates into the model as special days or "holidays."
+```{r, warning=FALSE, message=FALSE}
+ceasefires <- data_frame(
+  holiday = 'ceasefire',
+  ds = ceasefire.initial, # Fridays
+  lower_window = 0,
+  upper_window = 2 # for Sat and Sun
+)
+```
+
+Then fit the model, accounting for general time trends as well as yearly and weekly seasonality. 
+```{r, warning=FALSE, message=FALSE}
+library(prophet)
+
+m1 <- prophet(data.frame(ds=daily$CrimeDate,
+                         y=daily$shootings), 
+              yearly.seasonality = T,
+              weekly.seasonality = T, 
+              mcmc.samples = 500,
+              holidays = ceasefires,
+              cores=4)
+
+```
+
+We plot the result. We can see that there are more shootings in recent years, but ceasefires seem to be associated with fewer shootings. 
+```{r, echo=FALSE}
+future <- make_future_dataframe(m1, periods = 90)
+forecast <- predict(m1, future)
+plot(m1, forecast)
+```
+
+The ```prophet``` code is really simple, which is nice. Here's how we made the above plot:
+```{r, eval=FALSE}
+future <- make_future_dataframe(m1, periods = 90)
+forecast <- predict(m1, future)
+plot(m1, forecast)
+```
+
+Here is the decomposition of the time series. In general, it looks like Thursdays are good, and summers are bad. The "holidays" are Ceasefires. The Ceasefires appear to be associated with fewer shootings, even after accounting for weekly seasonality, yearly seasonality, and overall time trends. 
+
+```{r, echo=FALSE}
+prophet_plot_components(m1, forecast)
+```
+
+The  ```prophet``` code for plotting all these components was a single command: 
+```{r, eval=FALSE}
+prophet_plot_components(m1, forecast)
+```
+
+## Customized model
+
+The ```prophet``` package doesn't let us fit poisson likelihoods and doesn't let us drill down and check the various effects for stuff like statistical significance, so we're going to fit our own Bayesian model using Stan via the ```brms``` package.
+
+We want to include information about the day of the week (Mon-Sun), the day of the year (0-364), and the date (julian), as well as a binary variable indicating whether a date occurs during ceasefire. 
+```{r}
+library(lubridate)
+
+daily$weekday <- factor(weekdays(daily$CrimeDate), levels=c("Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"))
+daily$day.of.year <- yday(daily$CrimeDate)
+daily$ceasefire <- factor(ifelse(daily$CrimeDate %in% ceasefire.weekends, 1, 0),labels=c("Regular Day","Ceasefire Weekend"))
+daily$jul <- julian(daily$CrimeDate)
+daily$julz <- scale(daily$jul)[,1]
+```
+
+#### Fit the model
+
+We'll predict shootings using a spline time trend, a cyclical spline for yearly seasonality, random effects for day of the week, and a binary indicator for the ceasefire. We use a Poisson link function because the outcome is a count and the ```mean``` is about the same as ```sd```.
+
+```{r, message=FALSE, warning=FALSE}
+library(brms)
+
+m2 <- brm(shootings ~ s(julz) +
+            s(day.of.year, bs="cc") + #cyclical constraint 
+             weekday + 
+             ceasefire, 
+           data=daily,
+           cores=4,
+           iter=500,
+           family=poisson)
+```
+
+Let's look at the predictions from the model that we just fit. Ceasefires are visible as six dramatic downward red spikes in 2017-2018.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+daily$Estimate <- fitted(m2, scale="response")[,1]
+# 80% posterior predictive interval
+preds <- predict(m2, summary=FALSE)
+daily$high <- apply(preds,2,function(x){quantile(x, prob=c(.9))})
+daily$low <- apply(preds,2,function(x){quantile(x, prob=c(.1))})
+
+daily %>% 
+  ggplot(aes(x = CrimeDate, y = shootings)) +
+  geom_point(alpha=.2) +
+  geom_line(aes(y = Estimate), alpha=.5, color="red") +
+  geom_ribbon(aes(ymin=low, ymax=high), alpha=.2) +
+  xlab("date") +
+  theme_bw()
+```
+
+The results cohere well with the ```prophet``` model, but will allow us to drill down further. Here's how we created the above plot:
+
+```{r, eval=FALSE}
+daily$Estimate <- fitted(m2, scale="response")[,1]
+# 80% posterior predictive interval
+preds <- predict(m2, summary=FALSE)
+daily$high <- apply(preds,2,function(x){quantile(x, prob=c(.9))})
+daily$low <- apply(preds,2,function(x){quantile(x, prob=c(.1))})
+
+daily %>% 
+  ggplot(aes(x = CrimeDate, y = shootings)) +
+  geom_point(alpha=.2) +
+  geom_line(aes(y = Estimate), alpha=.5, color="red") +
+  geom_ribbon(aes(ymin=low, ymax=high), alpha=.2) +
+  xlab("date") +
+  theme_bw()
+```
+
+#### Plot model components
+
+Here are the decomposed seasonal and time trend effects:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+p <- purrr::map(
+       c("day.of.year [all]", "weekday", "julz [all]", "ceasefire"),
+       ~  ggeffects::ggpredict(m2, .x) %>% plot() + theme_bw()
+     )
+
+p[[1]] <- p[[1]] + xlab("Day of year") + ggtitle(" ")
+p[[2]] <- p[[2]] + xlab("Day of week") + ggtitle(" ")
+p[[3]] <- p[[3]] + xlab("Time trend") + ggtitle(" ")
+library(gridExtra)
+grid.arrange(p[[3]], p[[2]],p[[1]])
+```
+
+And now look at the effect of ceasefire weekend, after accounting for these time trends and seasonal effects. On an average day in Baltimore, at least two people get shot. But ceasefire weekend is different. Ceasefire weekends appear to prevent more than one shooting every day.
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+p[[4]] + xlab("")
+```
+
+I produced these component plots with the following code:
+```{r, eval=FALSE}
+p <- purrr::map(
+       c("day.of.year [all]", "weekday", "julz [all]", "ceasefire"),
+       ~  ggeffects::ggpredict(m2, .x) %>% plot() + theme_bw()
+     )
+
+p[[1]] <- p[[1]] + xlab("Day of year") + ggtitle(" ")
+p[[2]] <- p[[2]] + xlab("Day of week") + ggtitle(" ")
+p[[3]] <- p[[3]] + xlab("Time trend") + ggtitle(" ")
+library(gridExtra)
+grid.arrange(p[[3]], p[[2]],p[[1]])
+p[[4]] + xlab("")
+```
