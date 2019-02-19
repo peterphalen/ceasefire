@@ -5,28 +5,16 @@ output:
     df_print: paged
 ---
 
-```{r, include = FALSE}
-#download needed packages you don't have 
-wants <- c("tidyverse",
-           "prophet", 
-           "leaflet", 
-           "lubridate",
-           "geojsonio", 
-           "scales",
-           "brms")
-has   <- wants %in% rownames(installed.packages())
-if(any(!has)) install.packages(wants[!has])
-#load needed packages
-sapply(wants, require, character.only = TRUE)
-```
-
-[Baltimore Ceasefire 365](https://baltimoreceasefire.com/) is a city-wide call asking Baltimore residents to avoid having any murders through quarterly Ceasefires and Peace Challenges (Feb, May, August, and Nov). Here I model the impact of the ceasefire on shootings.
+[Baltimore Ceasefire 365](https://baltimoreceasefire.com/) is a city-wide call asking Baltimore residents to avoid having any murders through quarterly Ceasefires and Peace Challenges (February, May, August, and November). In this post we use open data to model the impact of the ceasefire on shootings.
 
 ## Shootings in Baltimore
 
-Baltimore releases [detailed data](https://data.baltimorecity.gov) on issues relevant to the city, including crime. This allows us to get a pretty precise idea of the distribution of shootings in Baltimore.
+Baltimore releases [detailed data](https://data.baltimorecity.gov) on issues relevant to the city, including crime. This allows us to get a good idea of the distribution of shootings in Baltimore.
 
 ```{r, message=FALSE, include=FALSE}
+library(tidyverse)
+library(scales)
+
 bpd <- read_csv("/Users/peterphalen/Documents/ceasefire/BPD_Part_1_Victim_Based_Crime_Data.csv")
 
 # subset to shootings or homicides with a firearm
@@ -77,7 +65,7 @@ bpd$CrimeDate <- as.Date(bpd$CrimeDate, format = "%m/%d/%Y")
 # there are many crimes per day. collapse to daily counts
 daily <- bpd %>% group_by(CrimeDate) %>% summarise(shootings = n())
 
-# fill missing dates, because some had no shotings
+# fill missing dates, because some had no shootings
 full.ts <- data.frame(CrimeDate = seq(daily$CrimeDate[1], 
                                       daily$CrimeDate[nrow(daily)], by="day"))
 daily <- full_join(full.ts,daily)
@@ -100,7 +88,6 @@ These shootings disproportionately affect black communities. You can tap areas o
 library(geojsonio)
 library(leaflet)
 
-bpd$Neighborhood <- factor(bpd$Neighborhood)
 bpd <- subset(bpd, !is.na(Neighborhood))
 
 # count by neighobrhood
@@ -111,19 +98,18 @@ count <- bpd %>%
 # get polygons to draw neighborhood maps
 nbds <- geojsonio::geojson_read("/Users/peterphalen/Documents/ceasefire/Neighborhoods.geojson", what = "sp")
 
-getshootingcount <- function(neighborhood){
+get_shooting_count <- function(neighborhood){
   nbd <- as.character(neighborhood)
-  nbds <- as.character(count$Neighborhood)
-  if(nbd %in% nbds){
+  if(nbd %in% count$Neighborhood){
     count <- count[count$Neighborhood == nbd,]$total.count
     return(count)
   }
-  if(!(nbd %in% nbds)){
+  if(!(nbd %in% count$Neighborhood)){
     return(0)
   }
 }
 
-nbds$count <- sapply(nbds$Name, getshootingcount)
+nbds$count <- sapply(nbds$Name, get_shooting_count)
 
 # draw legend
 range.count <- range(nbds$count,na.rm=T)
@@ -141,13 +127,13 @@ leaflet(nbds) %>%
 
 ```
 
-The code to produce this map--as well as a population-adjusted version (not run)--can be found here:
+Here is code to produce the above map---as well as a population-adjusted version (not run):
 
 ```{r, eval=FALSE}
 library(geojsonio)
 library(leaflet)
 
-bpd$Neighborhood <- factor(bpd$Neighborhood)
+bpd$Neighborhood <- as.character(bpd$Neighborhood)
 bpd <- subset(bpd, !is.na(Neighborhood))
 
 count <- bpd %>%
@@ -159,20 +145,21 @@ count <- bpd %>%
 # but I'm pulling from a github backup for stability
 nbds <- geojsonio::geojson_read("https://raw.githubusercontent.com/peterphalen/ceasefire/master/Neighborhoods.geojson", what = "sp")
 
-getcount <- function(neighborhood){
+get_shooting_count <- function(neighborhood){
   nbd <- as.character(neighborhood)
-  nbds <- as.character(count$Neighborhood)
-  if(nbd %in% nbds){
+  if(nbd %in% count$Neighborhood){
     count <- count[count$Neighborhood == nbd,]$total.count
     return(count)
   }
-  if(!(nbd %in% nbds)){
+  if(!(nbd %in% count$Neighborhood)){
     return(0)
   }
 }
 
-nbds$count <- sapply(nbds$Name, getcount)
+nbds$count <- sapply(nbds$Name, get_shooting_count)
 
+# draw legend
+range.count <- range(nbds$count,na.rm=T)
 labs <- c(0,50,100,150,200)
 pal.crime <- colorNumeric(colorRamp(c('#ccccff', 'red')), labs)
 
@@ -232,15 +219,14 @@ ceasefire.initial <-
 ```
 
 We determine the weekends of each ceasefire so we can see whether these weekends had fewer shootings, after accounting for other trends and seasonal effects.
+
 ```{r}
-ceasefire.weekends <- ceasefire.initial[1]
-for (i in 2:length(ceasefire.initial)){
-  ceasefire.weekends <- 
-    c(ceasefire.weekends,
-    seq(from=ceasefire.initial[i], 
-      by="day", 
-      length.out=3))
-}
+ceasefire.weekends <- lapply(ceasefire.initial, 
+                               function(x){
+                                 seq(from=x, 
+                                   by="day", 
+                                   length.out=3)})
+ceasefire.weekends <- do.call("c", ceasefire.weekends)
 ```
 
 ## Initial model
@@ -258,8 +244,10 @@ ceasefires <- data_frame(
 ```
 
 Then fit the model, accounting for general time trends as well as yearly and weekly seasonality. 
+
 ```{r, warning=FALSE, message=FALSE}
 library(prophet)
+
 ts <- data.frame(ds=daily$CrimeDate,
                  y=daily$shootings)
 m1 <- prophet(ts, 
@@ -271,7 +259,7 @@ m1 <- prophet(ts,
 
 ```
 
-We plot the model against the data. We can see that there are more shootings in recent years, but there is clear seasonality. And check out the multiple downward blue spikes in the bottom-right...
+We plot the model against the data:
 
 ```{r, echo=FALSE}
 future <- make_future_dataframe(m1, periods = 30)
@@ -279,41 +267,43 @@ forecast <- predict(m1, future)
 plot(m1, forecast)
 ```
 
-The ```prophet``` code is really simple, which is nice. Here's how we made the above plot:
+There are more shootings in the past few years, but clear seasonality. And check out the multiple downward blue spikes at the bottom-right of the plot... 
 
-```{r, eval=FALSE}
-future <- make_future_dataframe(m1, periods = 30)
-forecast <- predict(m1, future)
-plot(m1, forecast)
-```
-
-Here is the decomposition of the time series. In general, it looks like Thursdays are good, and summers are bad. 
-
-The "holidays" (those downward spikes) are ceasefires. Ceasefires appear to be associated with fewer shootings, even after accounting for weekly seasonality, yearly seasonality, and overall time trends. 
+Here is the decomposition of the above time series: 
 
 ```{r, echo=FALSE}
 prophet_plot_components(m1, forecast)
 ```
 
-The  ```prophet``` code for plotting all these components was a single command: 
+The "holidays" are ceasefires (those downward spikes). Ceasefires appear to be associated with fewer shootings, even after accounting for weekly seasonality, yearly seasonality, and overall time trends. The ```prophet``` code is really simple, which is nice. Here's how we made the above plots: 
+
 ```{r, eval=FALSE}
+future <- make_future_dataframe(m1, periods = 30)
+forecast <- predict(m1, future)
+plot(m1, forecast)
 prophet_plot_components(m1, forecast)
 ```
 
 ## Customized model
 
-The ```prophet``` package is user-friendly but it doesn't let us drill down and check the various effects for stuff like statistical significance. It also doesn't allow us to use a poisson link function, which we want because the outcome is a count and has almost identical mean and standard deviation. So we're going to fit our own Bayesian model in Stan using the more flexible ```brms``` package.
+The ```prophet``` package is user-friendly but it doesn't let us drill down and check the various effects for stuff like statistical significance. It also doesn't allow us to use a poisson link function, which we want because the outcome is a count and has almost identical mean and standard deviation. So we're going to fit our own Bayesian model in Stan using the more flexible ```rstanarm``` package.
 
-We want to include information about the day of the week (Mon-Sun), the day of the year (0-364), and the date (julian), as well as a binary variable indicating whether a date occurs during ceasefire. 
+We want to include information about the day of the week (Mon-Sun), the day of the year (0-364), and the date, as well as a binary variable indicating whether a date occurs during ceasefire. 
 
-```{r}
+```{r, warning=FALSE, message=FALSE}
 library(lubridate)
 
-daily$weekday <- factor(weekdays(daily$CrimeDate), levels=c("Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"))
+daily$weekday <- factor(weekdays(daily$CrimeDate),
+                          levels=c("Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"))
+
 daily$day.of.year <- yday(daily$CrimeDate)
+
+# the julian calendar is a simple system for numeric dates
 daily$jul <- julian(daily$CrimeDate)
 daily$julz <- scale(daily$jul)[,1]
-daily$ceasefire <- factor(ifelse(daily$CrimeDate %in% ceasefire.weekends, 1, 0),labels=c("Regular Day","Ceasefire Weekend"))
+
+daily$ceasefire <- factor(ifelse(daily$CrimeDate %in% ceasefire.weekends, 1, 0),
+                          labels=c("Regular Day","Ceasefire Weekend"))
 ```
 
 #### Fit the model
@@ -321,25 +311,27 @@ daily$ceasefire <- factor(ifelse(daily$CrimeDate %in% ceasefire.weekends, 1, 0),
 We'll predict shootings using a spline time trend, a cyclical spline for yearly seasonality, random effects for day of the week, and a binary indicator for the ceasefire. We use a Poisson link function because the outcome is a count and the ```mean``` is about the same as ```sd```.
 
 ```{r, message=FALSE, warning=FALSE}
-library(brms)
+library(rstanarm)
 
-m2 <- brm(shootings ~ s(julz) +
+m2 <- stan_gamm4(shootings ~ 
+            s(julz) +
             s(day.of.year, 
-              bs="cc") + #cyclical constraint 
-             weekday + 
-             ceasefire, 
+             bs="cc") + #cyclical constraint 
+            weekday + 
+            ceasefire, 
            data=daily,
            cores=4,
            iter=500,
            family=poisson)
 ```
 
-Let's plot the model against the observations. Ceasefires are visible as six dramatic downward red spikes in 2017-2018.
+Here is a plot of the model against the observations:
 
 ```{r, echo=FALSE, message=FALSE, warning=FALSE}
-daily$Estimate <- fitted(m2, scale="response")[,1]
-# 80% posterior predictive interval
-preds <- predict(m2, summary=FALSE)
+daily$Estimate <- apply(posterior_linpred(m2, transform=TRUE),
+                        2, median)
+# 80% posterior predictive interval for main plot
+preds <- posterior_predict(m2, transform=TRUE)
 daily$high <- apply(preds,2,function(x){quantile(x, prob=c(.9))})
 daily$low <- apply(preds,2,function(x){quantile(x, prob=c(.1))})
 
@@ -353,12 +345,13 @@ daily %>%
   theme_bw()
 ```
 
-The results cohere well with ```prophet```, but this model fits the data better in many ways. For example, we no longer see impossible predictions of less than zero shootings. Also, doing things with ```brms``` will allow us to analyze the model more carefully. Here's how we created the above plot:
+Ceasefires are visible as six dramatic downward red spikes in 2017-2018. The results cohere well with ```prophet```, but this model fits the data better in many ways. For example, we no longer see impossible predictions of less than zero shootings. Here's how we created the above plot:
 
 ```{r, eval=FALSE}
-daily$Estimate <- fitted(m2, scale="response")[,1]
-# 80% posterior predictive interval
-preds <- predict(m2, summary=FALSE)
+daily$Estimate <- apply(posterior_linpred(m2, transform=TRUE),
+                        2, median)
+# 80% posterior predictive interval for main plot
+preds <- posterior_predict(m2, transform=TRUE)
 daily$high <- apply(preds,2,function(x){quantile(x, prob=c(.9))})
 daily$low <- apply(preds,2,function(x){quantile(x, prob=c(.1))})
 
@@ -374,47 +367,107 @@ daily %>%
 
 #### Plot model components
 
-Here are the marginal seasonal and time trend effects, showing the components that make up the above time series:
+Here are the marginal seasonal and time trend effects, showing the components that make up the above time series. The specific numbers on the y-axis are dependent upon the reference point, but these figures gives you the right idea of the shape of the trends.
 
 ```{r, echo=FALSE, message=FALSE, warning=FALSE}
 p <- purrr::map(
        c("day.of.year [all]", "weekday", "julz [all]", "ceasefire"),
-       ~  ggeffects::ggpredict(m2, .x) %>% plot() + theme_bw()
+       ~ ggeffects::ggpredict(m2, .x, ci.lvl= .95) %>% plot() + theme_bw()
      )
 
-p[[1]] <- p[[1]] + xlab("Day of year") + ggtitle(" ")
+
+doy.axis.dates <- seq(as.Date("0-01-01"),by="month",length.out=12)
+p[[1]] <- p[[1]] + 
+  xlab("Day of year") + 
+  ggtitle(" ") +
+  scale_x_continuous(
+    breaks=yday(c(doy.axis.dates, as.Date("0-12-31"))),
+    labels=date_format("%b")(c(doy.axis.dates, as.Date("0-01-01")))
+  )
+
 p[[2]] <- p[[2]] + xlab("Day of week") + ggtitle(" ")
-p[[3]] <- p[[3]] + xlab("Time trend") + ggtitle(" ")
+
+trend.axis.dates <- seq(from=as.Date("2012-01-01"),
+                      by="year",
+                      length.out=9)
+p[[3]] <- p[[3]] + 
+  xlab("Time trend") + 
+  ggtitle(" ") +
+  scale_x_continuous(
+    breaks=scale(julian(trend.axis.dates),
+                 center=mean(daily$jul),
+                 scale=sd(daily$jul)),
+    labels=date_format("%m-%Y")(trend.axis.dates))
+
 library(gridExtra)
-grid.arrange(p[[3]], p[[2]],p[[1]])
+grid.arrange(p[[3]],p[[2]],p[[1]])
 ```
 
 Our model specification has slower-moving seasonal trends. Summers still show up as particularly bad. 
 
 ## Effect of Ceasefire
 
-Finally, we can use this model to plot the effect of Ceasefires on shootings per day, after accounting for all these trends and seasonal effects:
+Finally, we can use this model to measure the effect of Ceasefires on shootings per day, after accounting for all these trends and seasonalities. The effect of the ceasefire is classically statistically significant:
+
+```{r, message=FALSE, warning=FALSE}
+plot(m2, pars="ceasefireCeasefire Weekend") + scale_y_discrete(labels="ceasefire")
+```
+
+We can also use this model to see the impact of the ceasefire at specific points in time. For example, here is the effect of ceasefire on Saturdays during the summer:
 
 ```{r, echo=FALSE, message=FALSE, warning=FALSE}
+p <- purrr::map( # use saturday as reference
+       c("day.of.year [all]", "weekday [Saturday]", "julz [all]", "ceasefire"),
+       ~ ggeffects::ggpredict(m2, .x, ci.lvl= .95) %>% plot() + theme_bw()
+     )
+
 p[[4]] +  # ceasefires
   xlab("") + 
   ggtitle("Predicted counts of shootings",
           subtitle="with 95% credible intervals")
 ```
 
-On an average day in Baltimore, at least three people get shot. But Ceasefire weekends are different. After accounting for time trends and seasonal effects, Ceasefires appear to prevent about two shootings every day.
+On an average day like this in Baltimore, at least three people get shot. But Ceasefire weekends are different. After accounting for time trends and seasonal effects, Ceasefires appear to prevent about two shootings per day.
 
 ```{r, eval=FALSE}
 #----- code to produce final decomposition figures ------
 p <- purrr::map(
        c("day.of.year [all]", "weekday", "julz [all]", "ceasefire"),
-       ~  ggeffects::ggpredict(m2, .x) %>% plot() + theme_bw()
+       ~ ggeffects::ggpredict(m2, .x, ci.lvl= .95) %>% plot() + theme_bw()
      )
-p[[1]] <- p[[1]] + xlab("Day of year") + ggtitle(" ")
+
+
+doy.axis.dates <- seq(as.Date("0-01-01"),by="month",length.out=12)
+p[[1]] <- p[[1]] + 
+  xlab("Day of year") + 
+  ggtitle(" ") +
+  scale_x_continuous(
+    breaks=yday(c(doy.axis.dates, as.Date("0-12-31"))),
+    labels=date_format("%b %d")(c(doy.axis.dates, as.Date("0-01-01")))
+  )
+
 p[[2]] <- p[[2]] + xlab("Day of week") + ggtitle(" ")
-p[[3]] <- p[[3]] + xlab("Time trend") + ggtitle(" ")
+
+trend.axis.dates <- seq(from=as.Date("2012-01-01"),
+                      by="year",
+                      length.out=9)
+p[[3]] <- p[[3]] + 
+  xlab("Time trend") + 
+  ggtitle(" ") +
+  scale_x_continuous(
+    breaks=scale(julian(trend.axis.dates),
+                 center=mean(daily$jul),
+                 scale=sd(daily$jul)),
+    labels=date_format("%m-%Y")(trend.axis.dates))
+
 library(gridExtra)
-grid.arrange(p[[3]], p[[2]],p[[1]])
+grid.arrange(p[[3]],p[[2]],p[[1]])
+
+p <- purrr::map( # index to Saturday for the ceasefire effect
+       c("day.of.year [all]", "weekday [Saturday]", "julz [all]", "ceasefire"),
+       ~ ggeffects::ggpredict(m2, .x, ci.lvl= .95) %>% plot() + theme_bw()
+     )
+
 p[[4]] +  # ceasefires
   xlab("") + 
   ggtitle("Predicted counts of shootings",
