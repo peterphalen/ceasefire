@@ -221,12 +221,16 @@ ceasefire.initial <-
 We determine the weekends of each ceasefire so we can see whether these weekends had fewer shootings, after accounting for other trends and seasonal effects.
 
 ```{r}
-ceasefire.weekends <- lapply(ceasefire.initial, 
-                               function(x){
-                                 seq(from=x, 
-                                   by="day", 
-                                   length.out=3)})
-ceasefire.weekends <- do.call("c", ceasefire.weekends)
+ceasefire.weekends <- 
+  lapply(ceasefire.initial,
+         function(x){
+           seq(from=x,
+               by="day",
+               length.out=3)
+           }
+         )
+ceasefire.weekends <- do.call("c", 
+                              ceasefire.weekends)
 ```
 
 ## Initial model
@@ -294,13 +298,12 @@ We want to include information about the day of the week (Mon-Sun), the day of t
 library(lubridate)
 
 daily$weekday <- factor(weekdays(daily$CrimeDate),
-                          levels=c("Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"))
+                        levels=c("Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"))
 
 daily$day.of.year <- yday(daily$CrimeDate)
 
 # the julian calendar is a simple system for numeric dates
 daily$jul <- julian(daily$CrimeDate)
-daily$julz <- scale(daily$jul)[,1]
 
 daily$ceasefire <- factor(ifelse(daily$CrimeDate %in% ceasefire.weekends, 1, 0),
                           labels=c("Regular Day","Ceasefire Weekend"))
@@ -314,11 +317,11 @@ We'll predict shootings using a spline time trend, a cyclical spline for yearly 
 library(rstanarm)
 
 m2 <- stan_gamm4(shootings ~ 
-            s(julz) +
+            s(jul) +
             s(day.of.year, 
              bs="cc") + #cyclical constraint 
-            weekday + 
             ceasefire, 
+           random= ~ (1 | weekday),
            data=daily,
            cores=4,
            iter=500,
@@ -330,10 +333,13 @@ Here is a plot of the model against the observations:
 ```{r, echo=FALSE, message=FALSE, warning=FALSE}
 daily$Estimate <- apply(posterior_linpred(m2, transform=TRUE),
                         2, median)
+
 # 80% posterior predictive interval for main plot
 preds <- posterior_predict(m2, transform=TRUE)
-daily$high <- apply(preds,2,function(x){quantile(x, prob=c(.9))})
-daily$low <- apply(preds,2,function(x){quantile(x, prob=c(.1))})
+preds <- apply(preds, 2, function(x){quantile(x, prob=c(.1, .9))})
+
+daily$high <- preds["90%",]
+daily$low <- preds["10%",]
 
 daily %>% 
   ggplot(aes(x = CrimeDate, y = shootings)) +
@@ -350,10 +356,13 @@ Ceasefires are visible as six dramatic downward red spikes in 2017-2018. The res
 ```{r, eval=FALSE}
 daily$Estimate <- apply(posterior_linpred(m2, transform=TRUE),
                         2, median)
+
 # 80% posterior predictive interval for main plot
 preds <- posterior_predict(m2, transform=TRUE)
-daily$high <- apply(preds,2,function(x){quantile(x, prob=c(.9))})
-daily$low <- apply(preds,2,function(x){quantile(x, prob=c(.1))})
+preds <- apply(preds, 2, function(x){quantile(x, prob=c(.1, .9))})
+
+daily$high <- preds["90%",]
+daily$low <- preds["10%",]
 
 daily %>% 
   ggplot(aes(x = CrimeDate, y = shootings)) +
@@ -365,42 +374,124 @@ daily %>%
   theme_bw()
 ```
 
+
 #### Plot model components
 
-Here are the marginal seasonal and time trend effects, showing the components that make up the above time series. The specific numbers on the y-axis are dependent upon the reference point, but these figures gives you the right idea of the shape of the trends.
+Here are the marginal seasonal and time trend effects, showing the components that make up the above time series. The specific numbers of shootings are to some extent dependent upon the reference point, but these figures gives you the right idea of the shape of the trends.
 
 ```{r, echo=FALSE, message=FALSE, warning=FALSE}
-p <- purrr::map(
-       c("day.of.year [all]", "weekday", "julz [all]", "ceasefire"),
-       ~ ggeffects::ggpredict(m2, .x, ci.lvl= .95) %>% plot() + theme_bw()
-     )
+### Day of year plot
+doy.frame <- with(daily, # Ref: regular day in mid-2018
+                data.frame(
+                  jul=julian(as.Date("2018-08-01"))[1],
+                  weekday="Saturday", # weekday not used for this prediction
+                  ceasefire="Regular Day",
+                  day.of.year=0:364))
 
+post <- posterior_linpred(m2,
+                           newdata=doy.frame,
+                           transform=TRUE,
+                          re.form = NA)
+doy.frame$Estimate <- apply(post,2, median)
+
+# 95% CI
+ci <- apply(post,2,function(x){quantile(x, prob=c(.025, .975))})
+doy.frame$low <- ci["2.5%",]
+doy.frame$high <- ci["97.5%",]
 
 doy.axis.dates <- seq(as.Date("0-01-01"),by="month",length.out=12)
-p[[1]] <- p[[1]] + 
+
+doy.plot <- 
+  doy.frame %>% 
+  ggplot() +
+  aes(x=day.of.year, y=Estimate) +
+  geom_line(aes(y = Estimate), alpha=.5) +
+  geom_ribbon(aes(ymin=low, ymax=high), alpha=.2) +
   xlab("Day of year") + 
+  ylab("Shootings") +
   ggtitle(" ") +
   scale_x_continuous(
     breaks=yday(c(doy.axis.dates, as.Date("0-12-31"))),
-    labels=date_format("%b")(c(doy.axis.dates, as.Date("0-01-01")))
-  )
+    labels=date_format("%b %d")(c(doy.axis.dates, as.Date("0-01-01")))
+  ) +
+  theme_bw()
 
-p[[2]] <- p[[2]] + xlab("Day of week") + ggtitle(" ")
+### Day of week plot
+
+wday.frame <- with(daily, # Ref: regular day in August 2018
+                  data.frame(
+                    jul=julian(as.Date("2018-08-01"))[1],
+                    weekday=unique(daily$weekday),
+                    ceasefire="Regular Day",
+                    day.of.year=yday(as.Date("2018-08-01"))))
+
+post <- posterior_linpred(m2,
+                          newdata=wday.frame,
+                          transform=TRUE)
+wday.frame$Estimate <- apply(post,2, median)
+
+# 95% CI
+ci <- apply(post,2,function(x){quantile(x, prob=c(.025, .975))})
+wday.frame$low <- ci["2.5%",]
+wday.frame$high <- ci["97.5%",]
+
+# weekday plot
+wday.plot <- 
+  wday.frame %>% 
+  ggplot() +
+  aes(x=weekday, y=Estimate) +
+  geom_point(size=2) +
+  geom_errorbar(aes(ymin=low, ymax=high),
+                width=.5) +
+  xlab("Day of week") + 
+  ylab("Shootings") +
+  ggtitle(" ") +
+  theme_bw()
+
+### Time trend plot
+
+time.frame <- with(daily, # Ref: August
+                  data.frame(
+                    jul=jul,
+                    weekday="Saturday", # not used for this prediction
+                    ceasefire="Regular Day",
+                    day.of.year=yday(as.Date("2018-08-01"))))
+
+post <- posterior_linpred(m2,
+                          newdata=time.frame,
+                          transform=TRUE,
+                          re.form = NA)
+time.frame$Estimate <- apply(post,2, median)
+
+# 95% CI
+ci <- apply(post,2,function(x){quantile(x, prob=c(.025, .975))})
+time.frame$low <- ci["2.5%",]
+time.frame$high <- ci["97.5%",]
 
 trend.axis.dates <- seq(from=as.Date("2012-01-01"),
-                      by="year",
-                      length.out=9)
-p[[3]] <- p[[3]] + 
+                        by="year",
+                        length.out=9)
+# time trend plot
+time.plot <- 
+  time.frame %>% 
+  ggplot() +
+  aes(x=jul, y=Estimate) +
+  geom_line(aes(y = Estimate), alpha=.5) +
+  geom_ribbon(aes(ymin=low, ymax=high), alpha=.2) +
   xlab("Time trend") + 
+  ylab("Shootings") +
   ggtitle(" ") +
   scale_x_continuous(
     breaks=scale(julian(trend.axis.dates),
                  center=mean(daily$jul),
                  scale=sd(daily$jul)),
-    labels=date_format("%m-%Y")(trend.axis.dates))
+    labels=date_format("%m-%Y")(trend.axis.dates)) +
+  theme_bw()
+
+# Display above plots together
 
 library(gridExtra)
-grid.arrange(p[[3]],p[[2]],p[[1]])
+grid.arrange(time.plot, wday.plot, doy.plot)
 ```
 
 Our model specification has slower-moving seasonal trends. Summers still show up as particularly bad. 
@@ -410,66 +501,200 @@ Our model specification has slower-moving seasonal trends. Summers still show up
 Finally, we can use this model to measure the effect of Ceasefires on shootings per day, after accounting for all these trends and seasonalities. The effect of the ceasefire is classically statistically significant:
 
 ```{r, message=FALSE, warning=FALSE}
-plot(m2, pars="ceasefireCeasefire Weekend") + scale_y_discrete(labels="ceasefire")
+plot(m2, pars="ceasefireCeasefire Weekend") + 
+  scale_y_discrete(labels="ceasefire effect") +
+  xlim(c(-1.5,0)) 
 ```
 
-We can also use this model to see the impact of the ceasefire at specific points in time. For example, here is the effect of ceasefire on Saturdays during the summer:
+We can also use this model to see the impact of the ceasefire at specific points in time. For example, here is the model-estimated impact of ceasefire on Saturdays during the summer of 2018:
 
 ```{r, echo=FALSE, message=FALSE, warning=FALSE}
-p <- purrr::map( # use saturday as reference
-       c("day.of.year [all]", "weekday [Saturday]", "julz [all]", "ceasefire"),
-       ~ ggeffects::ggpredict(m2, .x, ci.lvl= .95) %>% plot() + theme_bw()
-     )
+### Ceasefire plot
 
-p[[4]] +  # ceasefires
+ceasefire.frame <- with(daily, # Ref: Saturday in August 2018
+                  data.frame(
+                    jul=julian(as.Date("2018-08-01"))[1],
+                    weekday="Saturday",
+                    ceasefire=factor(c("Regular Day",
+                                "Ceasefire Weekend"),
+                                levels=c("Regular Day",
+                                         "Ceasefire Weekend")),
+                    day.of.year=yday(as.Date("2018-08-01"))))
+
+post <- posterior_linpred(m2,
+                          newdata=ceasefire.frame,
+                          transform=TRUE)
+ceasefire.frame$Estimate <- apply(post,2, median)
+
+# 95% CI
+ci <- apply(post,2,function(x){quantile(x, prob=c(.025, .975))})
+ceasefire.frame$low <- ci["2.5%",]
+ceasefire.frame$high <- ci["97.5%",]
+
+ceasefire.frame %>% 
+  ggplot() +
+  aes(x=ceasefire, y=Estimate) +
+  geom_point(aes(y = Estimate),
+             size=2) +
+  geom_errorbar(aes(ymin=low, ymax=high), 
+                width=.5) +
   xlab("") + 
+  ylab("Shootings") +
   ggtitle("Predicted counts of shootings",
-          subtitle="with 95% credible intervals")
+          subtitle="with 95% credible intervals") +
+  theme_bw()
 ```
 
 On an average day like this in Baltimore, at least three people get shot. But Ceasefire weekends are different. After accounting for time trends and seasonal effects, Ceasefires appear to prevent about two shootings per day.
 
 ```{r, eval=FALSE}
 #----- code to produce final decomposition figures ------
-p <- purrr::map(
-       c("day.of.year [all]", "weekday", "julz [all]", "ceasefire"),
-       ~ ggeffects::ggpredict(m2, .x, ci.lvl= .95) %>% plot() + theme_bw()
-     )
 
+### Day of year plot
+doy.frame <- with(daily, # Ref: regular day in mid-2018
+                data.frame(
+                  jul=julian(as.Date("2018-08-01"))[1],
+                  weekday="Saturday", # weekday not used for this prediction
+                  ceasefire="Regular Day",
+                  day.of.year=0:364))
+
+post <- posterior_linpred(m2,
+                           newdata=doy.frame,
+                           transform=TRUE,
+                          re.form = NA)
+doy.frame$Estimate <- apply(post,2, median)
+
+# 95% CI
+ci <- apply(post,2,function(x){quantile(x, prob=c(.025, .975))})
+doy.frame$low <- ci["2.5%",]
+doy.frame$high <- ci["97.5%",]
 
 doy.axis.dates <- seq(as.Date("0-01-01"),by="month",length.out=12)
-p[[1]] <- p[[1]] + 
+
+doy.plot <- 
+  doy.frame %>% 
+  ggplot() +
+  aes(x=day.of.year, y=Estimate) +
+  geom_line(aes(y = Estimate), alpha=.5) +
+  geom_ribbon(aes(ymin=low, ymax=high), alpha=.2) +
   xlab("Day of year") + 
+  ylab("Shootings") +
   ggtitle(" ") +
   scale_x_continuous(
     breaks=yday(c(doy.axis.dates, as.Date("0-12-31"))),
     labels=date_format("%b %d")(c(doy.axis.dates, as.Date("0-01-01")))
-  )
+  ) +
+  theme_bw()
 
-p[[2]] <- p[[2]] + xlab("Day of week") + ggtitle(" ")
+### Day of week plot
+
+wday.frame <- with(daily, # Ref: regular day in August 2018
+                  data.frame(
+                    jul=julian(as.Date("2018-08-01"))[1],
+                    weekday=unique(daily$weekday),
+                    ceasefire="Regular Day",
+                    day.of.year=yday(as.Date("2018-08-01"))))
+
+post <- posterior_linpred(m2,
+                          newdata=wday.frame,
+                          transform=TRUE)
+wday.frame$Estimate <- apply(post,2, median)
+
+# 95% CI
+ci <- apply(post,2,function(x){quantile(x, prob=c(.025, .975))})
+wday.frame$low <- ci["2.5%",]
+wday.frame$high <- ci["97.5%",]
+
+# weekday plot
+wday.plot <- 
+  wday.frame %>% 
+  ggplot() +
+  aes(x=weekday, y=Estimate) +
+  geom_point(size=2) +
+  geom_errorbar(aes(ymin=low, ymax=high),
+                width=.5) +
+  xlab("Day of week") + 
+  ylab("Shootings") +
+  ggtitle(" ") +
+  theme_bw()
+
+### Time trend plot
+
+time.frame <- with(daily, # Ref: August
+                  data.frame(
+                    jul=jul,
+                    weekday="Saturday", # not used for this prediction
+                    ceasefire="Regular Day",
+                    day.of.year=yday(as.Date("2018-08-01"))))
+
+post <- posterior_linpred(m2,
+                          newdata=time.frame,
+                          transform=TRUE,
+                          re.form = NA)
+time.frame$Estimate <- apply(post,2, median)
+
+# 95% CI
+ci <- apply(post,2,function(x){quantile(x, prob=c(.025, .975))})
+time.frame$low <- ci["2.5%",]
+time.frame$high <- ci["97.5%",]
 
 trend.axis.dates <- seq(from=as.Date("2012-01-01"),
-                      by="year",
-                      length.out=9)
-p[[3]] <- p[[3]] + 
+                        by="year",
+                        length.out=9)
+# time trend plot
+time.plot <- 
+  time.frame %>% 
+  ggplot() +
+  aes(x=jul, y=Estimate) +
+  geom_line(aes(y = Estimate), alpha=.5) +
+  geom_ribbon(aes(ymin=low, ymax=high), alpha=.2) +
   xlab("Time trend") + 
+  ylab("Shootings") +
   ggtitle(" ") +
   scale_x_continuous(
     breaks=scale(julian(trend.axis.dates),
                  center=mean(daily$jul),
                  scale=sd(daily$jul)),
-    labels=date_format("%m-%Y")(trend.axis.dates))
+    labels=date_format("%m-%Y")(trend.axis.dates)) +
+  theme_bw()
+
+# Display above plots together
 
 library(gridExtra)
-grid.arrange(p[[3]],p[[2]],p[[1]])
+grid.arrange(time.plot, wday.plot, doy.plot)
 
-p <- purrr::map( # index to Saturday for the ceasefire effect
-       c("day.of.year [all]", "weekday [Saturday]", "julz [all]", "ceasefire"),
-       ~ ggeffects::ggpredict(m2, .x, ci.lvl= .95) %>% plot() + theme_bw()
-     )
+### Ceasefire plot
 
-p[[4]] +  # ceasefires
+ceasefire.frame <- with(daily, # Ref: Saturday in August 2018
+                  data.frame(
+                    jul=julian(as.Date("2018-08-01"))[1],
+                    weekday="Saturday",
+                    ceasefire=factor(c("Regular Day",
+                                "Ceasefire Weekend"),
+                                levels=c("Regular Day",
+                                         "Ceasefire Weekend")),
+                    day.of.year=yday(as.Date("2018-08-01"))))
+
+post <- posterior_linpred(m2,
+                          newdata=ceasefire.frame,
+                          transform=TRUE)
+ceasefire.frame$Estimate <- apply(post,2, median)
+
+# 95% CI
+ci <- apply(post,2,function(x){quantile(x, prob=c(.025, .975))})
+ceasefire.frame$low <- ci["2.5%",]
+ceasefire.frame$high <- ci["97.5%",]
+
+ceasefire.frame %>% 
+  ggplot() +
+  aes(x=ceasefire, y=Estimate) +
+  geom_point(aes(y = Estimate),
+             size=2) +
+  geom_errorbar(aes(ymin=low, ymax=high), 
+                width=.5) +
   xlab("") + 
+  ylab("Shootings") +
   ggtitle("Predicted counts of shootings",
-          subtitle="with 95% credible intervals")
+          subtitle="with 95% credible intervals") +
+  theme_bw()
 ```
