@@ -5,7 +5,7 @@ output:
     df_print: paged
 ---
 
-[Baltimore Ceasefire 365](https://baltimoreceasefire.com/) is a city-wide call asking Baltimore residents to avoid having any murders through quarterly Ceasefires and Peace Challenges (February, May, August, and November). In this post we use open data to model the impact of the ceasefire on shootings.
+[Baltimore Ceasefire 365](https://baltimoreceasefire.com/) is a city-wide call asking Baltimore residents to avoid having any murders through quarterly Ceasefires and Peace Challenges (February, May, August, and November). In this post we use open data and [R](https://en.wikipedia.org/wiki/R_(programming_language)) to model the impact of the ceasefire on shootings.
 
 ## Shootings in Baltimore
 
@@ -292,7 +292,7 @@ prophet_plot_components(m1, forecast)
 
 The ```prophet``` package is user-friendly but it doesn't let us drill down and check the various effects for stuff like statistical significance. It also doesn't allow us to use a poisson link function, which we want because the outcome is a count and has almost identical mean and standard deviation. So we're going to fit our own Bayesian model in Stan using the more flexible ```rstanarm``` package.
 
-We want to include information about the day of the week (Mon-Sun), the day of the year (0-364), and the date, as well as a binary variable indicating whether a date occurs during ceasefire. 
+We want to include information about the day of the week (Mon-Sun), the day of the year (1-365), and the date, as well as a binary variable indicating whether a date occurs during ceasefire. 
 
 ```{r, warning=FALSE, message=FALSE}
 library(lubridate)
@@ -386,9 +386,9 @@ Here are the marginal seasonal and time trend effects, showing the components th
 doy.frame <- with(daily, # Ref: regular day in mid-2018
                 data.frame(
                   jul=julian(as.Date("2018-08-01"))[1],
-                  weekday="Saturday", # weekday not used for this prediction
+                  weekday=0, # weekday not used for this prediction
                   ceasefire="Regular Day",
-                  day.of.year=0:364))
+                  day.of.year=1:365))
 
 post <- posterior_linpred(m2,
                            newdata=doy.frame,
@@ -437,7 +437,6 @@ ci <- apply(post,2,function(x){quantile(x, prob=c(.025, .975))})
 wday.frame$low <- ci["2.5%",]
 wday.frame$high <- ci["97.5%",]
 
-# weekday plot
 wday.plot <- 
   wday.frame %>% 
   ggplot() +
@@ -455,7 +454,7 @@ wday.plot <-
 time.frame <- with(daily, # Ref: August
                   data.frame(
                     jul=jul,
-                    weekday="Saturday", # not used for this prediction
+                    weekday=0, # not used for this prediction
                     ceasefire="Regular Day",
                     day.of.year=yday(as.Date("2018-08-01"))))
 
@@ -473,7 +472,6 @@ time.frame$high <- ci["97.5%",]
 trend.axis.dates <- seq(from=as.Date("2012-01-01"),
                         by="year",
                         length.out=9)
-# time trend plot
 time.plot <- 
   time.frame %>% 
   ggplot() +
@@ -552,14 +550,14 @@ On an average day like this in Baltimore, at least three people get shot. But Ce
 ```{r, eval=FALSE}
 #----- code to produce final decomposition figures ------
 
-#### Day of year plot
+### Day of year plot
 
 doy.frame <- with(daily, # Ref: regular day in mid-2018
                 data.frame(
                   jul=julian(as.Date("2018-08-01"))[1],
-                  weekday="Saturday", # weekday not used for this prediction
+                  weekday=0, # weekday not used for this prediction
                   ceasefire="Regular Day",
-                  day.of.year=0:364))
+                  day.of.year=1:365))
 
 post <- posterior_linpred(m2,
                            newdata=doy.frame,
@@ -589,7 +587,7 @@ doy.plot <-
   ) +
   theme_bw()
 
-#### Day of week plot
+### Day of week plot
 
 wday.frame <- with(daily, # Ref: regular day in August 2018
                   data.frame(
@@ -620,12 +618,12 @@ wday.plot <-
   ggtitle(" ") +
   theme_bw()
 
-#### Time trend plot
+### Time trend plot
 
 time.frame <- with(daily, # Ref: August
                   data.frame(
                     jul=jul,
-                    weekday="Saturday", # not used for this prediction
+                    weekday=0, # not used for this prediction
                     ceasefire="Regular Day",
                     day.of.year=yday(as.Date("2018-08-01"))))
 
