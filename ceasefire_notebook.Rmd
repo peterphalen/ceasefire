@@ -482,9 +482,7 @@ time.plot <-
   ylab("Shootings") +
   ggtitle(" ") +
   scale_x_continuous(
-    breaks=scale(julian(trend.axis.dates),
-                 center=mean(daily$jul),
-                 scale=sd(daily$jul)),
+    breaks=julian(trend.axis.dates),
     labels=date_format("%m-%Y")(trend.axis.dates)) +
   theme_bw()
 
@@ -651,9 +649,7 @@ time.plot <-
   ylab("Shootings") +
   ggtitle(" ") +
   scale_x_continuous(
-    breaks=scale(julian(trend.axis.dates),
-                 center=mean(daily$jul),
-                 scale=sd(daily$jul)),
+    breaks=julian(trend.axis.dates),
     labels=date_format("%m-%Y")(trend.axis.dates)) +
   theme_bw()
 
