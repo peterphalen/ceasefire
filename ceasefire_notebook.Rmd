@@ -1,11 +1,14 @@
 ---
 title: "Modeling the Effect of Baltimore Ceasefire"
+date: "March 23, 2019"
 output:
   html_document:
     df_print: paged
 ---
 
-[Baltimore Ceasefire 365](https://baltimoreceasefire.com/) is a city-wide call asking Baltimore residents to avoid having any murders through quarterly Ceasefires and Peace Challenges (February, May, August, and November). In this post we use open data and [R](https://en.wikipedia.org/wiki/R_(programming_language)) to model the impact of the ceasefire on shootings.
+[Baltimore Ceasefire 365](https://baltimoreceasefire.com/) is a city-wide call asking Baltimore residents to avoid having any murders through quarterly Ceasefires and Peace Challenges (February, May, August, and November). 
+
+In this post, we use open data and [R](https://en.wikipedia.org/wiki/R_(programming_language)) to look at the distribution of shootings in space and time, and model the impact of the Ceasefires.
 
 ## Shootings in Baltimore
 
@@ -46,14 +49,12 @@ ggplot(daily) +
           subtitle="Baltimore (2012-present)")
 ```
 
-Shootings per day seem to have increased over time, but the time series is complicated. Here's how we got the data and created the above figure:
+Shootings per day appear to have increased over time, but the time series is complicated. Here's how we got the data and created the above figure:
 
 ```{r, eval=FALSE}
 library(tidyverse)
 library(scales)
 
-# data came from here: https://data.baltimorecity.gov/Public-Safety/BPD-Part-1-Victim-Based-Crime-Data/wsfq-mvij/data
-# but I'm loading a copy that I backed up on github
 bpd <- read_csv("https://raw.githubusercontent.com/peterphalen/ceasefire/master/BPD_Part_1_Victim_Based_Crime_Data.csv")
 
 # subset to shootings or homicides with a firearm
@@ -199,7 +200,7 @@ leaflet(nbds) %>% #draw population-adjusted map,
 
 ## Ceasefire weekends
 
-Ceasefires have been called four times per year since August 2017. These are "ceasefire weekends" but their impact often extends well beyond a few days ([one lasted twelve](https://www.baltimoresun.com/news/maryland/crime/bs-md-ci-ceasefire-anniversary-20180731-story.html)).
+Ceasefires have been called four times per year since August 2017. These are "ceasefire weekends" but their impact often extends well beyond a few days. [One lasted twelve](https://www.baltimoresun.com/news/maryland/crime/bs-md-ci-ceasefire-anniversary-20180731-story.html).
 
 Here are the first days of each ceasefire (all Fridays).
 ```{r, message=FALSE}
@@ -263,23 +264,22 @@ m1 <- prophet(ts,
 
 ```
 
-We plot the model against the data:
+We plot the model against the data. There are more shootings in the past few years, but clear seasonality. And check out the multiple downward blue spikes at the bottom-right of the plot...
 
 ```{r, echo=FALSE}
-future <- make_future_dataframe(m1, periods = 30)
+future <- make_future_dataframe(m1, periods = 10)
 forecast <- predict(m1, future)
 plot(m1, forecast)
 ```
 
-There are more shootings in the past few years, but clear seasonality. And check out the multiple downward blue spikes at the bottom-right of the plot... 
+Here is the decomposition of the above time series. The "holidays" are ceasefires (those downward spikes). Ceasefires appear to be associated with fewer shootings, even after accounting for weekly seasonality, yearly seasonality, and overall time trends. 
 
-Here is the decomposition of the above time series: 
 
 ```{r, echo=FALSE}
 prophet_plot_components(m1, forecast)
 ```
 
-The "holidays" are ceasefires (those downward spikes). Ceasefires appear to be associated with fewer shootings, even after accounting for weekly seasonality, yearly seasonality, and overall time trends. The ```prophet``` code is really simple, which is nice. Here's how we made the above plots: 
+The ```prophet``` code is really simple, which is nice. Here's how we produced the above decomposition plots:
 
 ```{r, eval=FALSE}
 future <- make_future_dataframe(m1, periods = 30)
@@ -290,21 +290,21 @@ prophet_plot_components(m1, forecast)
 
 ## Customized model
 
-The ```prophet``` package is user-friendly but it doesn't let us drill down and check the various effects for stuff like statistical significance. It also doesn't allow us to use a poisson link function, which we want because the outcome is a count and has almost identical mean and standard deviation. So we're going to fit our own Bayesian model in Stan using the more flexible ```rstanarm``` package.
+The ```prophet``` package is user-friendly but it doesn't let us drill down into the various effects very easily, and it doesn't allow us to use a poisson link function, which we want because the outcome is a count and has almost identical mean and standard deviation. So we're going to fit our own Bayesian model in Stan using the more flexible ```rstanarm``` package.
 
-We want to include information about the day of the week (Mon-Sun), the day of the year (1-365), and the date, as well as a binary variable indicating whether a date occurs during ceasefire. 
+We want to include information about the date, the day of the week (Mon-Sun), the day of the year (1-365), and a binary variable indicating whether a date occurs during ceasefire. 
 
 ```{r, warning=FALSE, message=FALSE}
 library(lubridate)
+
+# the julian calendar is a simple system for numeric dates
+daily$jul <- julian(daily$CrimeDate)
 
 daily$weekday <- factor(weekdays(daily$CrimeDate),
                         levels=c("Monday","Tuesday","Wednesday","Thursday",
                                  "Friday","Saturday","Sunday"))
 
 daily$day.of.year <- yday(daily$CrimeDate)
-
-# the julian calendar is a simple system for numeric dates
-daily$jul <- julian(daily$CrimeDate)
 
 daily$ceasefire <- factor(ifelse(daily$CrimeDate %in% ceasefire.weekends, 1, 0),
                           labels=c("Regular Day","Ceasefire Weekend"))
@@ -325,11 +325,11 @@ m2 <- stan_gamm4(shootings ~
            random= ~ (1 | weekday),
            data=daily,
            cores=4,
-           iter=500,
+           iter=1000,
            family=poisson)
 ```
 
-Here is a plot of the model against the observations:
+Here is a plot of the model against the observations. Ceasefires are visible as seven dramatic downward red spikes beginning in 2017. The results cohere well with ```prophet```, but this model fits the data better in many ways. For example, we no longer see impossible predictions of less than zero shootings. 
 
 ```{r, echo=FALSE, message=FALSE, warning=FALSE}
 daily$Estimate <- apply(posterior_linpred(m2, transform=TRUE),
@@ -352,7 +352,7 @@ daily %>%
   theme_bw()
 ```
 
-Ceasefires are visible as six dramatic downward red spikes in 2017-2018. The results cohere well with ```prophet```, but this model fits the data better in many ways. For example, we no longer see impossible predictions of less than zero shootings. Here's how we created the above plot:
+Here's how we created the above plot:
 
 ```{r, eval=FALSE}
 daily$Estimate <- apply(posterior_linpred(m2, transform=TRUE),
@@ -378,7 +378,7 @@ daily %>%
 
 #### Plot model components
 
-Here are the marginal seasonal and time trend effects, showing the components that make up the above time series. The specific numbers of shootings are to some extent dependent upon the reference point, but these figures gives you the right idea of the shape of the trends.
+Here are the marginal seasonal and time trend effects, showing the components that make up the above time series. The specific numbers of shootings are to some extent dependent upon the reference point, but these figures give you the right idea of the shape of the trends.
 
 ```{r, echo=FALSE, message=FALSE, warning=FALSE}
 ### Day of year plot
@@ -538,12 +538,12 @@ ceasefire.frame %>%
                 width=.2) +
   xlab("") + 
   ylab("Shootings") +
-  ggtitle("Predicted counts of shootings",
+  ggtitle("Predicted shooting count",
           subtitle="with 95% credible intervals") +
   theme_bw()
 ```
 
-On an average day like this in Baltimore, at least three people get shot. But Ceasefire weekends are different. After accounting for time trends and seasonal effects, Ceasefires appear to prevent about two shootings per day.
+On an average summer day in Baltimore in the year 2018, at least three people were shot. But Ceasefire weekends were different. Ceasefires appear to have prevented about two shootings per day.
 
 ```{r, eval=FALSE}
 #----- code to produce final decomposition figures ------
