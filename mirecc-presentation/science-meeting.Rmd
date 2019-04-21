@@ -1,7 +1,7 @@
 ---
 title: "Gun Violence in Baltimore (2012-present): where it happens, when it happens, and the impact of Baltimore Ceasefire"
 author: "peter phalen"
-date: "3/23/2019"
+date: "3/26/2019"
 output: ioslides_presentation
 ---
 
@@ -78,6 +78,7 @@ daily <- daily %>% group_by(CrimeDate) %>%                         mutate_all(fu
 
 
 ![](./images/maps-are-misleading.png)
+
 
 ```{r, include=FALSE}
 #prepare map data
@@ -163,8 +164,9 @@ raw.map
 
 ## Geospatial disparities
 
-![](./images/racial-diversity-map.png)
+![](./images/aa-map.png)
 
+(https://bniajfi.org/indicators/Census%20Demographics/paa)
 
 # Modeling shootings in time
 
@@ -407,7 +409,7 @@ m2 <- stan_gamm4(shootings ~
            random= ~ (1 | weekday),
            data=daily, 
            cores=4,
-           iter=500, 
+           iter=1000, 
            family=poisson)
 ```
 
@@ -435,31 +437,31 @@ daily %>%
 ```
 
 ## Modeling the Ceasefire
-
+```{r, include=FALSE}
+library(bayesplot)
+```
 ```{r, message=FALSE, warning=FALSE}
-plot(m2, regex_pars="ceasefire") + 
-  
+mcmc_intervals(exp(as.array(m2, regex_pars = "ceasefire"))) + 
   scale_y_discrete(labels="ceasefire effect") +
-
-  xlim(c(-1.5,0)) 
+  xlim(c(0,1)) 
 ```
 
-## Modeling the Ceasefire
+## Prediction for the upcoming Ceasefire
 
-Model-estimated impact of ceasefire on Saturdays during the summer of 2018:
+We can use the model to estimate the impact of the next Ceasefire in Baltimore, which begins on Friday May 10th, 2019:
 
 ```{r, echo=FALSE, message=FALSE, warning=FALSE}
-### Ceasefire plot
 
-ceasefire.frame <- with(daily, # Ref: Saturday in August 2018
+pred.day <- as.Date("2019-05-10")
+ceasefire.frame <- with(daily, 
                   data.frame(
-                    jul=julian(as.Date("2018-08-01"))[1],
-                    weekday="Saturday",
+                    jul=julian(pred.day)[1],
+                    weekday="Friday",
                     ceasefire=factor(c("Regular Day",
                                 "Ceasefire Weekend"),
                                 levels=c("Regular Day",
                                          "Ceasefire Weekend")),
-                    day.of.year=yday(as.Date("2018-08-01"))))
+                    day.of.year=yday(pred.day)))
 
 post <- posterior_linpred(m2,
                           newdata=ceasefire.frame,
@@ -467,22 +469,32 @@ post <- posterior_linpred(m2,
 ceasefire.frame$Estimate <- apply(post,2, median)
 
 # 95% CI
-ci <- apply(post,2,function(x){quantile(x, prob=c(.025, .975))})
-ceasefire.frame$low <- ci["2.5%",]
-ceasefire.frame$high <- ci["97.5%",]
+ci <- apply(post,2,function(x){quantile(x, prob=c(.25, .75))})
+ceasefire.frame$low <- ci["25%",]
+ceasefire.frame$high <- ci["75%",]
+
+# 50% posterior predictive interval for main plot
+preds <- posterior_predict(m2,
+                          newdata=ceasefire.frame,
+                          transform=TRUE)
+
+ceasefire.frame$high.ppd <- apply(preds,2,function(x){quantile(x, prob=c(.75), na.rm=T)})
+ceasefire.frame$low.ppd <- apply(preds,2,function(x){quantile(x, prob=c(.25), na.rm=T)})
 
 ceasefire.frame %>% 
   ggplot() +
   aes(x=ceasefire, y=Estimate) +
+  geom_point(aes(y = low.ppd), col="blue", shape=95, size=5) +
+  geom_point(aes(y = high.ppd), col="blue", shape=95, size=5) +
   geom_point(aes(y = Estimate),
              size=2) +
   geom_errorbar(aes(ymin=low, ymax=high), 
                 width=.2) +
+
   xlab("") + 
   ylab("Shootings") +
-  ggtitle("Predicted counts of shootings",
-          subtitle="with 95% credible intervals") +
+  ggtitle("Predicted shooting count for Friday May 10, 2019",
+          subtitle="with 50% credible intervals (black) and posterior predictive intervals (blue)") +
   theme_bw()
 ```
-
 
