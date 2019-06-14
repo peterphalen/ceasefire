@@ -1,6 +1,6 @@
 ---
 title: "Modeling the Effect of Baltimore Ceasefire"
-date: "March 23, 2019"
+date: "June 13, 2019"
 output:
   html_document:
     df_print: paged
@@ -114,7 +114,7 @@ nbds$count <- sapply(nbds$Name, get_shooting_count)
 
 # draw legend
 range.count <- range(nbds$count,na.rm=T)
-labs <- c(0,50,100,150,200)
+labs <- c(0,50,100,150,200,250)
 pal.crime <- colorNumeric(colorRamp(c('#ccccff', 'red')), labs)
 
 leaflet(nbds) %>% 
@@ -161,7 +161,7 @@ nbds$count <- sapply(nbds$Name, get_shooting_count)
 
 # draw legend
 range.count <- range(nbds$count,na.rm=T)
-labs <- c(0,50,100,150,200)
+labs <- c(0,50,100,150,200,250)
 pal.crime <- colorNumeric(colorRamp(c('#ccccff', 'red')), labs)
 
 leaflet(nbds) %>% 
@@ -329,7 +329,7 @@ m2 <- stan_gamm4(shootings ~
            family=poisson)
 ```
 
-Here is a plot of the model against the observations. Ceasefires are visible as seven dramatic downward red spikes beginning in 2017. The results cohere well with ```prophet```, but this model fits the data better in many ways. For example, we no longer see impossible predictions of less than zero shootings. 
+Here is a plot of the model against the observations. Ceasefires are visible as eight dramatic downward red spikes beginning in 2017. The results cohere well with ```prophet```, but this model fits the data better in many ways. For example, we no longer see impossible predictions of less than zero shootings. 
 
 ```{r, echo=FALSE, message=FALSE, warning=FALSE}
 daily$Estimate <- apply(posterior_linpred(m2, transform=TRUE),
@@ -509,7 +509,7 @@ mcmc_intervals(ceasefire.effect) +
   xlim(c(0,1))
 ```
 
-We can also use this model to see the impact of the ceasefire at specific points in time. For example, here is the model-estimated impact of the next ceasefire, which will begin on Friday May 10th, 2019.
+We can also use this model to see the impact of the ceasefire at specific points in time. For example, here is the model-estimated impact of the ceasefire on Friday May 10th, 2019.
 
 ```{r, echo=FALSE, message=FALSE, warning=FALSE}
 ### Ceasefire plot
@@ -560,7 +560,7 @@ ceasefire.frame %>%
   theme_bw()
 ```
 
-Without a ceasefire, we would expect about three people to get shot on the first day of the weekend, on average. But this will be a Ceasefire weekend, so the model expects about two fewer shootings per day.
+Without a ceasefire, we would expect about three or four people to get shot on the first day of the weekend, on average. But this will be a Ceasefire weekend, so the model expects about two fewer shootings per day.
 
 ```{r, eval=FALSE}
 #----- code to produce final decomposition figures ------

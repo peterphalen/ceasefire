@@ -32,7 +32,7 @@ stopifnot(check1 == check2)
 bpd1 <- subset(bpd1, CrimeDate < as.Date("2019-01-01"))
 bpd2 <- subset(bpd2, CrimeDate >= as.Date("2019-01-01"))
 
-full.bpd <- rbind(bpd1, bpd2)
+full.bpd <- bind_rows(bpd1, bpd2)
 
 # enforce ordering by date, just in case
 full.bpd <- full.bpd[order(full.bpd$CrimeDate),]
